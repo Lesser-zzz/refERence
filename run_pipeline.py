@@ -8,10 +8,10 @@ from urllib.parse import quote
 import pandas as pd
 
 # ==========================================
-# ⚙️ 1. 환경 설정 및 타이머 (GitHub Actions)
+# ⚙️ 1. 환경 설정 및 타이머 (Deep Scrape 버전)
 # ==========================================
 START_TIME = time.time()
-MAX_EXECUTION_TIME = 5.3 * 3600  # 5시간 18분 (액션 강제종료 방지)
+MAX_EXECUTION_TIME = 5.5 * 3600  # 정확히 5.5시간 동안 가동
 API_KEY = os.environ.get("BSER_API_KEY")
 
 HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
@@ -23,7 +23,8 @@ TOP_ROUTES_FILE = "top_reference_routes.csv"
 
 SEASON_ID = 41
 MATCHING_MODE = 3
-MAX_LOOPS = 5000
+MAX_LOOPS = 50000       # 루프 횟수 제한을 대폭 늘려 시간 종료 시점까지 계속 가동되도록 유도
+RECENT_GAME_LIMIT = 50  # 기존 20판에서 50판으로 확장하여 더 깊은 전적 탐색
 REQUEST_INTERVAL = 1.1
 
 def load_lines(filename):
@@ -38,7 +39,7 @@ def append_line(filename, value):
 # ==========================================
 # 🚀 2. 데이터 수집 (스노우볼 샘플링)
 # ==========================================
-print("▶️ [1단계] 데이터 수집 시작...")
+print("▶️ [1단계] 데이터 수집 시작 (Deep Scrape Mode)...")
 processed_game_ids = set()
 if os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "r", encoding="utf-8-sig") as f:
@@ -54,10 +55,10 @@ processed_nicknames = load_lines(PROCESSED_FILE)
 pending_nicknames = load_lines(PENDING_FILE) - processed_nicknames
 queue = deque(pending_nicknames)
 
-# 시드 충전
+# 시드 충전 (초기 표본을 50명에서 200명으로 대폭 확대)
 if not queue:
     res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS).json()
-    for p in res_rank.get("topRanks", [])[:50]:
+    for p in res_rank.get("topRanks", [])[:200]:
         nick = p.get("nickname")
         if nick and nick not in processed_nicknames:
             queue.append(nick)
@@ -68,7 +69,7 @@ last_req = 0.0
 
 while queue and loop_count < MAX_LOOPS:
     if time.time() - START_TIME > MAX_EXECUTION_TIME:
-        print("⏱️ 안전 종료 시간 도달. 수집 루프를 중단합니다.")
+        print("⏱️ 5.5시간 제한에 도달하여 수집 루프를 안전하게 종료합니다.")
         break
 
     nickname = queue.popleft()
@@ -88,7 +89,8 @@ while queue and loop_count < MAX_LOOPS:
             res_games = requests.get(f"https://open-api.bser.io/v1/user/games/uid/{uid}", headers=HEADERS).json()
             last_req = time.time()
             
-            for game in res_games.get("userGames", [])[:20]:
+            # 더 깊은 과거의 전적까지 확인
+            for game in res_games.get("userGames", [])[:RECENT_GAME_LIMIT]:
                 gid = game.get("gameId")
                 if not gid or gid in processed_game_ids: continue
                 
@@ -116,6 +118,7 @@ while queue and loop_count < MAX_LOOPS:
                     
     except Exception as e:
         print(f"⚠️ 에러 발생: {e}")
+        time.sleep(5) # 네트워크 오류 시 잠시 대기
         
     processed_nicknames.add(nickname)
     append_line(PROCESSED_FILE, nickname)
@@ -155,6 +158,5 @@ if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
     final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
     final_df.sort_values(by='reference_score', ascending=False, inplace=True)
 
-    # 결과물 저장
     final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
     print("🎉 [refERence] 최종 분석 결과가 top_reference_routes.csv 파일로 저장되었습니다.")
