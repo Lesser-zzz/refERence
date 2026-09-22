@@ -28,7 +28,7 @@ jobs:
     - name: 🚀 refERence 데이터 파이프라인 (Deep Scrape) 실행
       env:
         BSER_API_KEY: ${{ secrets.BSER_API_KEY }}
-      run: python run_pipeline.py
+      run: python run_pipeline_short.py
 
     - name: 💾 변경된 데이터 자동 커밋 및 푸시
       run: |
