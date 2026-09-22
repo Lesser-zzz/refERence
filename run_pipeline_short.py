@@ -8,18 +8,18 @@ from urllib.parse import quote
 import pandas as pd
 
 # ==========================================
-# ⚙️ 1. 환경 설정 및 타이머 (초기 구축 & Short 버전)
+# ⚙️ 1. 환경 설정 및 타이머 (통합형 수동 실행)
 # ==========================================
 START_TIME = time.time()
-MAX_EXECUTION_TIME = 0.5 * 3600  # 30분 가동
+MAX_EXECUTION_TIME = 0.5 * 3600  # 테스트용 30분 (원하시면 나중에 5.5시간으로 변경 가능)
 API_KEY = os.environ.get("BSER_API_KEY")
 
 HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
-CSV_DATASET = "reference_dataset.csv"
+CSV_DATASET = "reference_dataset.csv"      # 단일 데이터셋으로 통합
 MAPPING_CSV = "er_master_mapping.csv"
 PENDING_FILE = "snowball_pending_add.txt"
 PROCESSED_FILE = "snowball_processed.txt"
-TOP_ROUTES_FILE = "top_reference_routes.csv"
+TOP_ROUTES_FILE = "top_reference_routes.csv" # 단일 결과 파일로 통합
 
 SEASON_ID = 41
 MATCHING_MODE = 3
@@ -39,10 +39,9 @@ def append_line(filename, value):
 # ==========================================
 # 🚀 2. 데이터 수집 (스노우볼 샘플링)
 # ==========================================
-print("▶️ [1단계] 데이터 수집 시작 (Initial Short Mode)...")
+print("▶️ [1단계] 데이터 수집 시작 (Unified Manual Mode)...")
 processed_game_ids = set()
 
-# 파일이 없으면 헤더와 함께 새로 생성하여 에러 원천 차단
 if os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "r", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
@@ -74,7 +73,7 @@ last_req = 0.0
 
 while queue and loop_count < MAX_LOOPS:
     if time.time() - START_TIME > MAX_EXECUTION_TIME:
-        print("⏱️ 30분 제한에 도달하여 수집 루프를 안전하게 종료합니다.")
+        print("⏱️ 제한 시간에 도달하여 수집 루프를 안전하게 종료합니다.")
         break
 
     nickname = queue.popleft()
@@ -143,7 +142,7 @@ if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
         valid_df = df_game[(df_game['routeId'] > 0) & (df_game['mmrBefore'] >= 7600)].copy()
         
         if valid_df.empty:
-            print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다. 다음 기회에 더 많이 쌓일 것입니다.")
+            print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다.")
         else:
             valid_df['rp_plus'] = valid_df['mmrGain'] > 0
 
