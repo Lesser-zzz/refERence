@@ -1,4 +1,4 @@
-name: refERence Data Pipeline (Manual)
+name: refERence Data Pipeline short (Manual)
 
 on:
   workflow_dispatch: # 오직 수동으로 버튼을 누를 때만 실행됨!
