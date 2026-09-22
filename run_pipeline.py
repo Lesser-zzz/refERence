@@ -14,7 +14,7 @@ START_TIME = time.time()
 MAX_EXECUTION_TIME = 5.5 * 3600  
 API_KEY = os.environ.get("BSER_API_KEY")
 
-HEADERS = {"x-api-key": BSER_API_KEY, "accept": "application/json"}
+HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
 CSV_DATASET = "reference_dataset.csv"
 MAPPING_CSV = "er_master_mapping.csv"
 PENDING_FILE = "snowball_pending_add.txt"
