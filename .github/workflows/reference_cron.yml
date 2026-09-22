@@ -2,8 +2,8 @@ name: refERence Data Pipeline
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # 6시간마다 실행 (UTC 기준)
-  workflow_dispatch: # 수동 실행 버튼 활성화
+    - cron: '0 */9 * * *' # 9시간마다 실행
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
     - name: 저장소 체크아웃
       uses: actions/checkout@v3
       with:
-        fetch-depth: 0 # 전체 히스토리를 가져와 푸시 충돌 방지
+        fetch-depth: 0
 
     - name: Python 환경 세팅
       uses: actions/setup-python@v4
@@ -36,5 +36,4 @@ jobs:
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git add reference_dataset.csv snowball_pending_add.txt snowball_processed.txt top_reference_routes.csv
         
-        # 변경사항이 있을 때만 커밋
         git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: 수집 데이터 및 최적 루트 갱신" && git pull --rebase origin main && git push)
