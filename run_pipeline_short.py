@@ -8,23 +8,23 @@ from urllib.parse import quote
 import pandas as pd
 
 # ==========================================
-# ⚙️ 1. 환경 설정 및 타이머 (Short 30분 버전)
+# ⚙️ 1. 환경 설정 및 타이머 (초기 구축 & Short 버전)
 # ==========================================
 START_TIME = time.time()
 MAX_EXECUTION_TIME = 0.5 * 3600  # 30분 가동
 API_KEY = os.environ.get("BSER_API_KEY")
 
 HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
-CSV_DATASET = "reference_dataset_short.csv"
+CSV_DATASET = "reference_dataset.csv"
 MAPPING_CSV = "er_master_mapping.csv"
-PENDING_FILE = "snowball_pending_add_short.txt"
-PROCESSED_FILE = "snowball_processed_short.txt"
-TOP_ROUTES_FILE = "top_reference_routes_short.csv"
+PENDING_FILE = "snowball_pending_add.txt"
+PROCESSED_FILE = "snowball_processed.txt"
+TOP_ROUTES_FILE = "top_reference_routes.csv"
 
 SEASON_ID = 41
 MATCHING_MODE = 3
 MAX_LOOPS = 5000       
-RECENT_GAME_LIMIT = 10  # 유저당 최근 10판만 가볍게 확인
+RECENT_GAME_LIMIT = 15  
 REQUEST_INTERVAL = 1.1
 
 def load_lines(filename):
@@ -39,14 +39,20 @@ def append_line(filename, value):
 # ==========================================
 # 🚀 2. 데이터 수집 (스노우볼 샘플링)
 # ==========================================
-print("▶️ [1단계] 데이터 수집 시작 (Short 30m Mode)...")
+print("▶️ [1단계] 데이터 수집 시작 (Initial Short Mode)...")
 processed_game_ids = set()
+
+# 파일이 없으면 헤더와 함께 새로 생성하여 에러 원천 차단
 if os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "r", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         next(reader, None)
         for row in reader:
-            if row: processed_game_ids.add(int(row[0]))
+            if row: 
+                try:
+                    processed_game_ids.add(int(row[0]))
+                except ValueError:
+                    continue
 else:
     with open(CSV_DATASET, "w", encoding="utf-8-sig", newline="") as f:
         csv.writer(f).writerow(["gameId", "characterNum", "bestWeapon", "routeId", "mmrBefore", "mmrGain", "gameRank"])
@@ -57,7 +63,7 @@ queue = deque(pending_nicknames)
 
 if not queue:
     res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS).json()
-    for p in res_rank.get("topRanks", [])[:20]: # 시드 20명으로 시작
+    for p in res_rank.get("topRanks", [])[:50]: 
         nick = p.get("nickname")
         if nick and nick not in processed_nicknames:
             queue.append(nick)
@@ -131,38 +137,41 @@ if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
     df_game = pd.read_csv(CSV_DATASET)
     df_map = pd.read_csv(MAPPING_CSV)
 
-    valid_df = df_game[(df_game['routeId'] > 0) & (df_game['mmrBefore'] >= 7600)].copy()
-    
-    if valid_df.empty:
-        print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 없어 분석을 건너뜁니다.")
+    if df_game.empty or len(df_game.columns) < 7:
+        print("⚠️ 수집된 데이터가 비어있어 분석을 건너뜁니다.")
     else:
-        valid_df['rp_plus'] = valid_df['mmrGain'] > 0
-
-        route_stats = valid_df.groupby(['characterNum', 'bestWeapon', 'routeId']).agg(
-            pick_count=('routeId', 'count'),
-            avg_rp_gain=('mmrGain', 'mean')
-        ).reset_index()
-
-        global_avg_rp = route_stats['avg_rp_gain'].mean()
-        m = 5 # Short 버전이므로 최소 픽 수 완화
-
-        route_stats['reference_score'] = (
-            (route_stats['pick_count'] * route_stats['avg_rp_gain']) + (m * global_avg_rp)
-        ) / (route_stats['pick_count'] + m)
-
-        route_stats.sort_values(by=['characterNum', 'bestWeapon', 'reference_score'], ascending=[True, True, False], inplace=True)
-        top_routes = route_stats.drop_duplicates(subset=['characterNum', 'bestWeapon'], keep='first').copy()
-
-        final_df = pd.merge(top_routes, df_map, left_on=['characterNum', 'bestWeapon'], right_on=['characterNum', 'weaponNum'], how='inner')
+        valid_df = df_game[(df_game['routeId'] > 0) & (df_game['mmrBefore'] >= 7600)].copy()
         
-        if not final_df.empty:
-            final_df['avg_rp_gain'] = pd.to_numeric(final_df['avg_rp_gain']).round(1).astype(str) + '점'
-            final_df['reference_score'] = pd.to_numeric(final_df['reference_score']).round(2)
-            
-            final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
-            final_df.sort_values(by='reference_score', ascending=False, inplace=True)
-
-            final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
-            print(f"🎉 [refERence] 최종 분석 결과가 {TOP_ROUTES_FILE} 파일로 저장되었습니다.")
+        if valid_df.empty:
+            print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다. 다음 기회에 더 많이 쌓일 것입니다.")
         else:
-            print("⚠️ 분석할 데이터가 부족하여 결과 파일을 생성하지 못했습니다.")
+            valid_df['rp_plus'] = valid_df['mmrGain'] > 0
+
+            route_stats = valid_df.groupby(['characterNum', 'bestWeapon', 'routeId']).agg(
+                pick_count=('routeId', 'count'),
+                avg_rp_gain=('mmrGain', 'mean')
+            ).reset_index()
+
+            global_avg_rp = route_stats['avg_rp_gain'].mean()
+            m = 5 
+
+            route_stats['reference_score'] = (
+                (route_stats['pick_count'] * route_stats['avg_rp_gain']) + (m * global_avg_rp)
+            ) / (route_stats['pick_count'] + m)
+
+            route_stats.sort_values(by=['characterNum', 'bestWeapon', 'reference_score'], ascending=[True, True, False], inplace=True)
+            top_routes = route_stats.drop_duplicates(subset=['characterNum', 'bestWeapon'], keep='first').copy()
+
+            final_df = pd.merge(top_routes, df_map, left_on=['characterNum', 'bestWeapon'], right_on=['characterNum', 'weaponNum'], how='inner')
+            
+            if not final_df.empty:
+                final_df['avg_rp_gain'] = pd.to_numeric(final_df['avg_rp_gain']).round(1).astype(str) + '점'
+                final_df['reference_score'] = pd.to_numeric(final_df['reference_score']).round(2)
+                
+                final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
+                final_df.sort_values(by='reference_score', ascending=False, inplace=True)
+
+                final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
+                print(f"🎉 [refERence] 최종 분석 결과가 {TOP_ROUTES_FILE} 파일로 저장되었습니다.")
+            else:
+                print("⚠️ 분석할 매칭 데이터가 부족하여 결과 파일을 생성하지 못했습니다.")
