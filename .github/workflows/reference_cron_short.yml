@@ -1,7 +1,7 @@
 name: refERence Data Pipeline short (Manual)
 
 on:
-  workflow_dispatch: # 오직 수동으로 버튼을 누를 때만 실행됨!
+  workflow_dispatch: # 오직 버튼을 눌렀을 때만 실행
 
 jobs:
   build:
@@ -25,24 +25,25 @@ jobs:
         python -m pip install --upgrade pip
         pip install pandas requests
 
-    - name: 🚀 refERence 데이터 파이프라인 (Deep Scrape) 실행
+    - name: 🚀 refERence 파이프라인 실행
       env:
         BSER_API_KEY: ${{ secrets.BSER_API_KEY }}
-      run: python run_pipeline_short.py
+      run: python run_pipeline_short.py # 통합된 파일명으로 실행
 
-    - name: 💾 변경된 데이터 자동 커밋 및 푸시
+    - name: 💾 변경된 데이터 자동 커밋 & 푸시
       run: |
         git config --local user.name "github-actions[bot]"
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         
-        git add reference_dataset.csv snowball_pending_add.txt snowball_processed.txt top_reference_routes.csv
+        # 존재하는 파일들만 유연하게 add 처리
+        git add reference_dataset.csv snowball_pending_add.txt snowball_processed.txt top_reference_routes.csv er_master_mapping.csv || true
         
         if git diff --cached --quiet; then
           echo "변경사항이 없습니다."
           exit 0
         fi
         
-        git commit -m "🤖 [자동] refERence 최적 루트 및 수집 데이터 갱신"
+        git commit -m "🤖 [자동] refERence 수집 데이터 및 최적 루트 갱신"
         git fetch origin main
         git pull --rebase origin main
         git push origin main
