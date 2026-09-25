@@ -1,4 +1,4 @@
-Import os
+import os
 import csv
 import time
 import json
