@@ -63,13 +63,11 @@ if len(processed_nicknames) >= 11000:
     print("🔄 [탐색 대기열 리셋] 11,000명 탐색 완료. 상위권 유저의 새로운 전적을 수집하기 위해 방문 기록을 초기화합니다.", flush=True)
     processed_nicknames.clear()
     pending_nicknames.clear()
-    
     open(PROCESSED_FILE, "w").close()
     open(PENDING_FILE, "w").close()
 
 queue = deque(pending_nicknames)
 
-# 방문 기록이 비워졌거나 처음 시작할 때 랭킹 API에서 최상위 시드 다시 확보
 if not queue:
     res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS)
     if res_rank.status_code == 200:
@@ -95,17 +93,27 @@ while queue and loop_count < MAX_LOOPS:
     if elapsed < REQUEST_INTERVAL: time.sleep(REQUEST_INTERVAL - elapsed)
     
     try:
-        res_user = requests.get(f"https://open-api.bser.io/v1/user/nickname?query={quote(nickname)}", headers=HEADERS, timeout=10)
+        # 1. 닉네임으로 검색하여 암호화된 userId 획득
+        user_url = f"https://open-api.bser.io/v1/user/nickname?query={quote(nickname)}"
+        res_user = requests.get(user_url, headers=HEADERS, timeout=10)
         last_req = time.time()
         
         saved_games_for_this_user = 0
         
+        if res_user.status_code == 429:
+            time.sleep(10)
+            queue.appendleft(nickname)
+            loop_count -= 1
+            continue
+
         if res_user.status_code == 200 and "user" in res_user.json():
-            user_id_str = res_user.json()["user"].get("userNum")
+            user_id_str = res_user.json()["user"].get("userId") # 💡 정답: userId 사용
             
             if user_id_str:
                 time.sleep(REQUEST_INTERVAL)
-                res_games = requests.get(f"https://open-api.bser.io/v1/user/games/uid/{user_id_str}", headers=HEADERS, timeout=10)
+                # 2. 올바른 엔드포인트 /uid/{userId} 호출
+                games_url = f"https://open-api.bser.io/v1/user/games/uid/{user_id_str}"
+                res_games = requests.get(games_url, headers=HEADERS, timeout=10)
                 last_req = time.time()
                 
                 if res_games.status_code == 200:
@@ -114,7 +122,8 @@ while queue and loop_count < MAX_LOOPS:
                         if not gid or gid in processed_game_ids: continue
                         
                         time.sleep(REQUEST_INTERVAL)
-                        res_detail = requests.get(f"https://open-api.bser.io/v1/games/{gid}", headers=HEADERS, timeout=10)
+                        detail_url = f"https://open-api.bser.io/v1/games/{gid}"
+                        res_detail = requests.get(detail_url, headers=HEADERS, timeout=10)
                         last_req = time.time()
                         
                         if res_detail.status_code == 200:
@@ -151,7 +160,7 @@ while queue and loop_count < MAX_LOOPS:
 print(f"✅ 수집 종료. 현재 누적 게임 수: {len(processed_game_ids)}", flush=True)
 
 # ==========================================
-# 📊 3. 최적 루트 추출 (베이지안 스코어)
+# 📊 3. 최적 루트 분석 (30판 하드 컷오프)
 # ==========================================
 print("▶️ [2단계] 최적 루트 분석 시작...", flush=True)
 if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
