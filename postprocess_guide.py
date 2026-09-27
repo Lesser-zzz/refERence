@@ -2,23 +2,40 @@ import os
 import pandas as pd
 import requests
 import json
+import glob
 from collections import Counter
 
 API_KEY = os.environ.get("BSER_API_KEY")
 HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
 
-CSV_DATASET = "reference_dataset.csv"
 TOP_ROUTES_FILE = "top_reference_routes.csv"
 SKILL_MAP = {1: 'Q', 2: 'W', 3: 'E', 4: 'R', 5: 'T'}
 
 print("▶️ [refERence] 루트 상세 가이드 데이터 추출 시작\n" + "="*60)
 
-if not os.path.exists(TOP_ROUTES_FILE) or not os.path.exists(CSV_DATASET):
-    print("❌ 필요한 데이터 파일이 없습니다. 메인 파이프라인을 먼저 실행해 주세요.")
+if not os.path.exists(TOP_ROUTES_FILE):
+    print("❌ 필요한 1위 루트 데이터 파일이 없습니다. 메인 파이프라인을 먼저 실행해 주세요.")
     exit()
 
 df_top = pd.read_csv(TOP_ROUTES_FILE)
-df_raw = pd.read_csv(CSV_DATASET)
+
+# 1. 분할된 모든 데이터셋을 읽어와 하나의 DataFrame으로 통합 (Archive 연동)
+all_dataset_files = glob.glob("reference_dataset*.csv")
+if not all_dataset_files:
+    print("❌ 수집된 매치 데이터 파일이 없습니다.")
+    exit()
+
+df_list = []
+for file in all_dataset_files:
+    try:
+        df_list.append(pd.read_csv(file))
+    except Exception:
+        continue
+
+if df_list:
+    df_raw = pd.concat(df_list, ignore_index=True)
+else:
+    df_raw = pd.DataFrame()
 
 # 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축
 item_name_map = {}
@@ -59,7 +76,8 @@ for _, row in df_top.iterrows():
             level_by_level = " - ".join(skill_list)
 
     # 2. 실전 매치 데이터에서 대체 아이템(최종 착용 장비) 통계 내기
-    match_data = df_raw[df_raw['routeId'] == route_id]
+    # 💡 핵심: mmrBefore >= 7600 조건을 통해 랭크 점수가 없는 일반 게임 데이터를 완벽히 걸러냄
+    match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
     for eq_str in match_data['equipment'].dropna():
