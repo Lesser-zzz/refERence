@@ -3,6 +3,7 @@ import csv
 import time
 import json
 import requests
+import glob  # 💡 분할된 파일들을 한 번에 불러오기 위해 추가
 from collections import deque
 from urllib.parse import quote
 import pandas as pd
@@ -24,7 +25,7 @@ TOP_ROUTES_FILE = "top_reference_routes.csv"
 SEASON_ID = 41
 MATCHING_MODE = 3
 MAX_LOOPS = 50000
-RECENT_GAME_LIMIT = 10
+RECENT_GAME_LIMIT = 50
 REQUEST_INTERVAL = 1.1
 
 def load_lines(filename):
@@ -37,21 +38,26 @@ def append_line(filename, value):
         f.write(f"{value}\n")
 
 # ==========================================
-# 🚀 2. 데이터 수집 (무한 누적 + 대기열 자동 리셋)
+# 🚀 2. 데이터 수집 (무한 누적 + 분할 파일 통합)
 # ==========================================
-print("▶️ [1단계] 데이터 수집 시작 (Season Accumulation & Auto-Revisit Mode)...", flush=True)
+print("▶️ [1단계] 데이터 수집 시작 (Archive Integration Mode)...", flush=True)
 processed_game_ids = set()
 
-# 💡 핵심: 원시 데이터는 절대 지우지 않고 무한 누적하여 과거 게임의 중복 수집을 막습니다.
-if os.path.exists(CSV_DATASET):
-    with open(CSV_DATASET, "r", encoding="utf-8-sig") as f:
+# 💡 핵심 1: 분할된 과거 데이터(till260927 등)와 현재 데이터를 모두 읽어와 중복 수집을 원천 차단합니다.
+all_dataset_files = glob.glob("reference_dataset*.csv")
+for file in all_dataset_files:
+    with open(file, "r", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         next(reader, None)
         for row in reader:
             if row:
-                try: processed_game_ids.add(int(row[0]))
-                except ValueError: continue
-else:
+                try:
+                    processed_game_ids.add(int(row[0]))
+                except ValueError:
+                    continue
+
+# 💡 핵심 2: 새로운 데이터는 오직 가장 가벼운 현재 파일(CSV_DATASET)에만 추가합니다.
+if not os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "w", encoding="utf-8-sig", newline="") as f:
         csv.writer(f).writerow(["gameId", "characterNum", "bestWeapon", "routeId", "mmrBefore", "mmrGain", "gameRank", "equipment"])
 
@@ -67,22 +73,13 @@ if len(processed_nicknames) >= 11000:
     open(PENDING_FILE, "w").close()
 
 queue = deque(pending_nicknames)
-
-if not queue:
-    res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS)
-    if res_rank.status_code == 200:
-        for p in res_rank.json().get("topRanks", [])[:200]:
-            nick = p.get("nickname")
-            if nick and nick not in processed_nicknames:
-                queue.append(nick)
-                append_line(PENDING_FILE, nick)
-
 loop_count = 0
 last_req = 0.0
 
+# [스노우볼 탐색 로직 (userNum 기반)]
 while queue and loop_count < MAX_LOOPS:
     if time.time() - START_TIME > MAX_EXECUTION_TIME:
-        print("⏱️ 5.5시간 제한에 도달하여 수집 루프를 안전하게 종료합니다.", flush=True)
+        print("⏱️ 시간 제한 도달. 수집 종료.", flush=True)
         break
 
     nickname = queue.popleft()
@@ -93,80 +90,85 @@ while queue and loop_count < MAX_LOOPS:
     if elapsed < REQUEST_INTERVAL: time.sleep(REQUEST_INTERVAL - elapsed)
     
     try:
-        # 1. 닉네임으로 검색하여 암호화된 userId 획득
         user_url = f"https://open-api.bser.io/v1/user/nickname?query={quote(nickname)}"
         res_user = requests.get(user_url, headers=HEADERS, timeout=10)
         last_req = time.time()
         
-        saved_games_for_this_user = 0
-        
-        if res_user.status_code == 429:
-            time.sleep(10)
-            queue.appendleft(nickname)
-            loop_count -= 1
-            continue
-
-        if res_user.status_code == 200 and "user" in res_user.json():
-            user_id_str = res_user.json()["user"].get("userId") # 💡 정답: userId 사용
-            
-            if user_id_str:
+        if res_user.status_code == 200:
+            user_json = res_user.json()
+            if "user" in user_json:
+                uid = user_json["user"].get("userNum")
                 time.sleep(REQUEST_INTERVAL)
-                # 2. 올바른 엔드포인트 /uid/{userId} 호출
-                games_url = f"https://open-api.bser.io/v1/user/games/uid/{user_id_str}"
-                res_games = requests.get(games_url, headers=HEADERS, timeout=10)
+                
+                games_url = f"https://open-api.bser.io/v1/user/games/uid/{uid}"
+                res_games = requests.get(games_url, headers=HEADERS)
                 last_req = time.time()
                 
                 if res_games.status_code == 200:
-                    for game in res_games.json().get("userGames", [])[:RECENT_GAME_LIMIT]:
+                    games_json = res_games.json()
+                    user_games = games_json.get("userGames", [])
+                    
+                    for game in user_games[:RECENT_GAME_LIMIT]:
                         gid = game.get("gameId")
                         if not gid or gid in processed_game_ids: continue
                         
                         time.sleep(REQUEST_INTERVAL)
                         detail_url = f"https://open-api.bser.io/v1/games/{gid}"
-                        res_detail = requests.get(detail_url, headers=HEADERS, timeout=10)
+                        res_detail = requests.get(detail_url, headers=HEADERS)
                         last_req = time.time()
                         
                         if res_detail.status_code == 200:
+                            detail_json = res_detail.json()
                             match_rows = []
-                            for p in res_detail.json().get("userGames", []):
+                            for p in detail_json.get("userGames", []):
                                 n_nick = p.get("nickname")
                                 if n_nick and n_nick not in processed_nicknames and n_nick not in queue:
                                     queue.append(n_nick)
                                     append_line(PENDING_FILE, n_nick)
                                 
-                                eq_data = json.dumps(p.get("equipment", []))
+                                equipment = json.dumps(p.get("equipment", []))
+                                
                                 match_rows.append([
                                     gid, p.get("characterNum", 0), p.get("bestWeapon", 0), 
                                     p.get("routeIdOfStart", p.get("routeId", 0)), 
                                     p.get("mmrBefore", 0), p.get("mmrGain", 0), p.get("gameRank", 0),
-                                    eq_data
+                                    equipment
                                 ])
                             
                             if match_rows:
                                 with open(CSV_DATASET, "a", encoding="utf-8-sig", newline="") as f:
                                     csv.writer(f).writerows(match_rows)
                                 processed_game_ids.add(gid)
-                                saved_games_for_this_user += 1
-                                
-        print(f"🔍 {loop_count}. '{nickname}' 탐색 완료 ~ {saved_games_for_this_user}게임 저장됨 (총 누적: {len(processed_game_ids)}개)", flush=True)
-
     except Exception as e:
-        print(f"⚠️ 에러 발생 (닉네임: {nickname}): {e}", flush=True)
         time.sleep(5)
         
     processed_nicknames.add(nickname)
     append_line(PROCESSED_FILE, nickname)
 
-print(f"✅ 수집 종료. 현재 누적 게임 수: {len(processed_game_ids)}", flush=True)
-
 # ==========================================
-# 📊 3. 최적 루트 분석 (30판 하드 컷오프)
+# 📊 3. 최적 루트 추출 (분할 파일 전체 병합 분석)
 # ==========================================
 print("▶️ [2단계] 최적 루트 분석 시작...", flush=True)
-if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
-    df_game = pd.read_csv(CSV_DATASET)
-    df_map = pd.read_csv(MAPPING_CSV)
 
+# 💡 핵심 3: 분석할 때는 glob으로 찾은 모든 과거/현재 분할 파일들을 가져와 하나로 합쳐서(pd.concat) 통계를 냅니다.
+all_dataset_files = glob.glob("reference_dataset*.csv")
+
+if all_dataset_files and os.path.exists(MAPPING_CSV):
+    df_list = []
+    for file in all_dataset_files:
+        try:
+            df = pd.read_csv(file)
+            df_list.append(df)
+        except Exception:
+            continue
+            
+    if df_list:
+        df_game = pd.concat(df_list, ignore_index=True)
+    else:
+        df_game = pd.DataFrame()
+        
+    df_map = pd.read_csv(MAPPING_CSV)
+    
     if df_game.empty or len(df_game.columns) < 8:
         print("⚠️ 수집된 데이터가 비어있어 분석을 건너뜁니다.", flush=True)
     else:
@@ -199,4 +201,4 @@ if os.path.exists(CSV_DATASET) and os.path.exists(MAPPING_CSV):
                     final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
                     final_df.sort_values(by='reference_score', ascending=False, inplace=True)
                     final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
-                    print(f"🎉 최적 분석 결과가 {TOP_ROUTES_FILE}에 저장되었습니다.", flush=True)
+                    print(f"🎉 과거 분할 데이터까지 성공적으로 통합하여 {TOP_ROUTES_FILE}을 최신화했습니다.", flush=True)
