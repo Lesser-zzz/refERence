@@ -25,7 +25,7 @@ TOP_ROUTES_FILE = "top_reference_routes.csv"
 SEASON_ID = 41
 MATCHING_MODE = 3
 MAX_LOOPS = 50000
-RECENT_GAME_LIMIT = 10  # 💡 과대적합 방지를 위해 10판으로 롤백 및 고정
+RECENT_GAME_LIMIT = 10
 REQUEST_INTERVAL = 1.1
 
 def load_lines(filename):
@@ -55,6 +55,9 @@ for file in all_dataset_files:
                     processed_game_ids.add(int(row[0]))
                 except ValueError:
                     continue
+
+# 💡 핵심: 과거 분할 데이터들을 싹 다 읽어온 직후의 총 길이가 곧 '진짜 전체 누적 게임 수'
+total_accumulated_games = len(processed_game_ids)
 
 # 메인 파일이 없다면 헤더를 포함하여 새로 생성
 if not os.path.exists(CSV_DATASET):
@@ -88,7 +91,7 @@ last_req = 0.0
 
 while queue and loop_count < MAX_LOOPS:
     if time.time() - START_TIME > MAX_EXECUTION_TIME:
-        print("⏱️ 5.5시간 제한 도달. 안전하게 루프 종료.")
+        print("⏱️ 5.5시간 제한 도달. 안전하게 루프 종료.", flush=True)
         break
 
     nickname = queue.popleft()
@@ -108,6 +111,8 @@ while queue and loop_count < MAX_LOOPS:
             queue.appendleft(nickname)
             loop_count -= 1
             continue
+            
+        saved_games_for_this_user = 0
 
         if res_user.status_code == 200 and "user" in res_user.json():
             user_id_str = res_user.json()["user"].get("userNum")
@@ -150,6 +155,12 @@ while queue and loop_count < MAX_LOOPS:
                                 with open(CSV_DATASET, "a", encoding="utf-8-sig", newline="") as f:
                                     csv.writer(f).writerows(match_rows)
                                 processed_game_ids.add(gid)
+                                saved_games_for_this_user += 1
+                                total_accumulated_games += 1
+
+        # 💡 flush=True를 유지하며 전체 누적치를 실시간으로 출력
+        print(f"🔍 {loop_count}. '{nickname}' 탐색 완료 ~ {saved_games_for_this_user}게임 저장됨 (총 누적: {total_accumulated_games}개)", flush=True)
+
     except Exception as e:
         time.sleep(5)
 
@@ -159,7 +170,7 @@ while queue and loop_count < MAX_LOOPS:
 # ==========================================
 # 📊 3. 최적 루트 분석 (분할 파일 전체 병합)
 # ==========================================
-print("▶️ [2단계] 최적 루트 분석 시작...")
+print("▶️ [2단계] 최적 루트 분석 시작...", flush=True)
 all_dataset_files = glob.glob("reference_dataset*.csv")
 
 if all_dataset_files and os.path.exists(MAPPING_CSV):
@@ -178,12 +189,12 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
     df_map = pd.read_csv(MAPPING_CSV)
 
     if df_game.empty or len(df_game.columns) < 8:
-        print("⚠️ 수집된 데이터가 비어있어 분석을 건너뜁니다.")
+        print("⚠️ 수집된 데이터가 비어있어 분석을 건너뜁니다.", flush=True)
     else:
         valid_df = df_game[(df_game['routeId'] > 0) & (df_game['mmrBefore'] >= 7600)].copy()
 
         if valid_df.empty:
-            print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다.")
+            print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다.", flush=True)
         else:
             valid_df['rp_plus'] = valid_df['mmrGain'] > 0
             route_stats = valid_df.groupby(['characterNum', 'bestWeapon', 'routeId']).agg(
@@ -194,7 +205,7 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
             route_stats = route_stats[route_stats['pick_count'] >= 30].copy()
 
             if route_stats.empty:
-                print("⚠️ 30판 이상 사용된 루트 데이터가 아직 없습니다.")
+                print("⚠️ 30판 이상 사용된 루트 데이터가 아직 없습니다.", flush=True)
             else:
                 global_avg_rp = route_stats['avg_rp_gain'].mean()
                 m = 30
@@ -208,4 +219,12 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
                     final_df['reference_score'] = pd.to_numeric(final_df['reference_score']).round(2)
                     final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
                     final_df.sort_values(by='reference_score', ascending=False, inplace=True)
+                    
+                    # 💡 최적 루트 파일을 먼저 저장
                     final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
+                    
+                    # 💡 파일의 가장 마지막 줄에 '현재 총 누적' 값을 추가로 기록
+                    with open(TOP_ROUTES_FILE, "a", encoding="utf-8-sig") as f:
+                        f.write(f"\n현재 총 누적 : {total_accumulated_games}")
+                        
+                    print(f"🎉 최종 분석 결과 저장 완료. (총 누적 데이터: {total_accumulated_games}건)", flush=True)
