@@ -40,7 +40,7 @@ def append_line(filename, value):
 # ==========================================
 # 🚀 2. 데이터 수집 (Archive Integration & userId Mode)
 # ==========================================
-print("▶️ [1단계] 데이터 수집 시작 (Archive Integration Mode)...", flush=True)
+print("▶️ [1단계] 데이터 수집 시작 (Ranked Mode Only)...", flush=True)
 processed_game_ids = set()
 
 # 분할된 모든 데이터셋을 읽어와 중복 게임 ID 원천 차단
@@ -67,7 +67,7 @@ if not os.path.exists(CSV_DATASET):
 processed_nicknames = load_lines(PROCESSED_FILE)
 pending_nicknames = load_lines(PENDING_FILE) - processed_nicknames
 
-# 🔄 [유저 방문 기록 초기화] 11,000명 도달 시 랭커 재방문을 위해 txt 파일만 백지화
+# 🔄 [유저 방문 기록 초기화] 11,000명 도달 시 랭커 재방문을 위해 txt 파일 백지화
 if len(processed_nicknames) >= 11000:
     print("🔄 [탐색 대기열 리셋] 11,000명 탐색 완료. 상위권 유저 전적 갱신을 위해 기록을 초기화합니다.", flush=True)
     processed_nicknames.clear()
@@ -116,7 +116,6 @@ while queue and loop_count < MAX_LOOPS:
         saved_games_for_this_user = 0
 
         if res_user.status_code == 200 and "user" in res_user.json():
-            # 💡 핵심: 반드시 userId를 사용해야 정상적으로 전적이 조회됨
             user_id_str = res_user.json()["user"].get("userId")
             
             if user_id_str:
@@ -128,6 +127,11 @@ while queue and loop_count < MAX_LOOPS:
                 if res_games.status_code == 200:
                     games_data = res_games.json().get("userGames", [])
                     for game in games_data[:RECENT_GAME_LIMIT]:
+                        
+                        # 💡 핵심 수정: 일반 게임, 코발트 등 랭크(3)가 아닌 게임은 완벽히 걸러냄
+                        if game.get("matchingMode") != MATCHING_MODE: 
+                            continue
+
                         gid = game.get("gameId")
                         if not gid or gid in processed_game_ids: continue
 
