@@ -38,7 +38,7 @@ def append_line(filename, value):
         f.write(f"{value}\n")
 
 # ==========================================
-# 🚀 2. 데이터 수집 (분할 파일 통합 및 자동 초기화)
+# 🚀 2. 데이터 수집 (Archive Integration & userId Mode)
 # ==========================================
 print("▶️ [1단계] 데이터 수집 시작 (Archive Integration Mode)...", flush=True)
 processed_game_ids = set()
@@ -56,7 +56,7 @@ for file in all_dataset_files:
                 except ValueError:
                     continue
 
-# 💡 핵심: 과거 분할 데이터들을 싹 다 읽어온 직후의 총 길이가 곧 '진짜 전체 누적 게임 수'
+# 과거 분할 데이터들을 읽어온 직후의 총 누적 게임 수
 total_accumulated_games = len(processed_game_ids)
 
 # 메인 파일이 없다면 헤더를 포함하여 새로 생성
@@ -77,7 +77,8 @@ if len(processed_nicknames) >= 11000:
 
 queue = deque(pending_nicknames)
 
-if not queue:
+# 💡 대기열이 10명 미만으로 간당간당하면 랭커 시드를 든든하게 다시 충전
+if len(queue) < 10:
     res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS)
     if res_rank.status_code == 200:
         for p in res_rank.json().get("topRanks", [])[:200]:
@@ -115,7 +116,8 @@ while queue and loop_count < MAX_LOOPS:
         saved_games_for_this_user = 0
 
         if res_user.status_code == 200 and "user" in res_user.json():
-            user_id_str = res_user.json()["user"].get("userNum")
+            # 💡 핵심: 반드시 userId를 사용해야 정상적으로 전적이 조회됨
+            user_id_str = res_user.json()["user"].get("userId")
             
             if user_id_str:
                 time.sleep(REQUEST_INTERVAL)
@@ -158,7 +160,6 @@ while queue and loop_count < MAX_LOOPS:
                                 saved_games_for_this_user += 1
                                 total_accumulated_games += 1
 
-        # 💡 flush=True를 유지하며 전체 누적치를 실시간으로 출력
         print(f"🔍 {loop_count}. '{nickname}' 탐색 완료 ~ {saved_games_for_this_user}게임 저장됨 (총 누적: {total_accumulated_games}개)", flush=True)
 
     except Exception as e:
@@ -220,10 +221,8 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
                     final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
                     final_df.sort_values(by='reference_score', ascending=False, inplace=True)
                     
-                    # 💡 최적 루트 파일을 먼저 저장
                     final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
                     
-                    # 💡 파일의 가장 마지막 줄에 '현재 총 누적' 값을 추가로 기록
                     with open(TOP_ROUTES_FILE, "a", encoding="utf-8-sig") as f:
                         f.write(f"\n현재 총 누적 : {total_accumulated_games}")
                         
