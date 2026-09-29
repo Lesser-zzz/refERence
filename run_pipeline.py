@@ -16,7 +16,6 @@ MAX_EXECUTION_TIME = 5.5 * 3600
 API_KEY = os.environ.get("BSER_API_KEY")
 HEADERS = {"x-api-key": API_KEY, "accept": "application/json"}
 
-# 💡 파일명 동적 할당을 위해 메인 변수 선언 방식 변경
 CURRENT_DATASET_PREFIX = "reference_dataset"
 MAPPING_CSV = "er_master_mapping.csv"
 PENDING_FILE = "snowball_pending_add.txt"
@@ -41,19 +40,15 @@ def append_line(filename, value):
 # ==========================================
 # 🔄 1-5. 데이터셋 용량 검사 및 백업(Archive) 로직
 # ==========================================
-# 가장 최근에 사용 중이던 현재 메인 데이터셋 파일 찾기
-# (여러 개가 있다면 가장 마지막으로 수정된 파일, 혹은 이름 순으로 가장 마지막 파일)
-all_datasets = sorted(glob.glob(f"{CURRENT_DATASET_PREFIX}*.csv"))
-CSV_DATASET = all_datasets[-1] if all_datasets else f"{CURRENT_DATASET_PREFIX}.csv"
+# 💡 핵심: 엉뚱한 과거 백업 파일이 잡히지 않도록, 작업 중인 메인 파일을 항상 고정
+CSV_DATASET = f"{CURRENT_DATASET_PREFIX}.csv"
 
-# 💡 파일이 존재하고 용량이 70MB (70 * 1024 * 1024 바이트)를 초과한다면 파일명 변경(백업)
+# 용량이 70MB (70 * 1024 * 1024 바이트)를 초과한다면 과거 기록으로 백업(Archive) 처리
 if os.path.exists(CSV_DATASET) and os.path.getsize(CSV_DATASET) > 70 * 1024 * 1024:
     timestamp = time.strftime("%Y%m%d_%H%M")
     backup_name = f"{CURRENT_DATASET_PREFIX}_{timestamp}.csv"
     os.rename(CSV_DATASET, backup_name)
     print(f"📦 데이터셋 용량이 70MB를 초과하여 새 파일로 백업되었습니다: {backup_name}", flush=True)
-    # 백업 후 새로운 빈 메인 파일 이름으로 초기화
-    CSV_DATASET = f"{CURRENT_DATASET_PREFIX}.csv"
 
 # ==========================================
 # 🚀 2. 데이터 수집 (Ranked & 7600+ Only Mode)
@@ -77,7 +72,7 @@ for file in all_dataset_files:
 # 과거 분할 데이터들을 읽어온 직후의 총 누적 게임 수
 total_accumulated_games = len(processed_game_ids)
 
-# 메인 파일이 없다면 헤더를 포함하여 새로 생성
+# 메인 파일이 없다면(방금 백업되어 사라졌거나 첫 실행이라면) 헤더를 포함하여 새로 생성
 if not os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "w", encoding="utf-8-sig", newline="") as f:
         csv.writer(f).writerow(["gameId", "characterNum", "bestWeapon", "routeId", "mmrBefore", "mmrGain", "gameRank", "equipment"])
@@ -192,6 +187,7 @@ while queue and loop_count < MAX_LOOPS:
     processed_nicknames.add(nickname)
     append_line(PROCESSED_FILE, nickname)
 
+
 # ==========================================
 # 📊 3. 최적 루트 분석 (분할 파일 전체 병합)
 # ==========================================
@@ -250,6 +246,6 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
                     
                     # 2. 파싱 에러 완벽 차단: 줄바꿈 제거 + 6열 형식(쉼표 5개) 유지
                     with open(TOP_ROUTES_FILE, "a", encoding="utf-8-sig") as f:
-                        f.write(f"현재 총 누적 : {total_accumulated_games},,,,,")
+                        f.write(f"현재 총 누적 : {total_accumulated_games},,,,,\n")
                         
                     print(f"🎉 최종 분석 결과 저장 완료. (총 누적 데이터: {total_accumulated_games}건)", flush=True)
