@@ -31,21 +31,24 @@ jobs:
       run: python run_pipeline.py
 
     - name: 💾 변경된 데이터 자동 커밋 & 푸시
-      if: always() # 🔥 핵심: 파이썬이 중간에 터지거나 강제 종료되어도 무조건 커밋을 실행함
+      if: always()
       run: |
         git config --local user.name "github-actions[bot]"
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         
-        for file in reference_dataset.csv snowball_pending_add.txt snowball_processed.txt top_reference_routes.csv er_master_mapping.csv; do
-          if [ -f "$file" ]; then git add "$file"; fi
-        done
+        # 🔥 핵심: 백업 파일(*.csv)과 모든 관련 파일을 누락 없이 staging
+        git add reference_dataset*.csv snowball_pending_add.txt snowball_processed.txt top_reference_routes.csv er_master_mapping.csv || true
         
         if git diff --cached --quiet; then
           echo "변경사항이 없습니다."
           exit 0
         fi
         
-        git commit -m "🤖 [자동] refERence 대규모 수집 데이터 갱신 (안전 커밋)"
+        git commit -m "🤖 [자동] refERence 대규모 수집 데이터 갱신"
         git fetch origin main
+        
+        # 찌꺼기 파일로 인한 pull --rebase 충돌 방지용 임시 치우기
+        git stash || true
+        
         git pull --rebase origin main
         git push origin main
