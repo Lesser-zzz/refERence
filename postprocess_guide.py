@@ -38,7 +38,7 @@ if df_list:
 else:
     df_raw = pd.DataFrame()
 
-# 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축
+# 💡 함정 1 해결: 정규식 폐기 및 직관적인 startswith+isdigit 로직 도입
 item_name_map = {}
 l10n_res = requests.get("https://open-api.bser.io/v1/l10n/Korean", headers=HEADERS)
 if l10n_res.status_code == 200:
@@ -46,71 +46,75 @@ if l10n_res.status_code == 200:
     if l10n_url:
         res_txt = requests.get(l10n_url)
         for line in res_txt.text.splitlines():
-            # 💡 님블뉴런의 모든 특수 구분자(┃, ▒, ↕) 분할
+            # 님블뉴런의 모든 특수 구분자(┃, ▒, ↕) 대응
             parts = re.split(r'[┃▒↕]', line)
             if len(parts) >= 2:
                 key = parts[0].strip()
                 val = parts[1].strip()
-                # 💡 영문 데이터 원천 차단 및 숫자 ID만 캡처
-                if re.match(r'^Item/Name/\d+$', key):
-                    item_code = key.replace("Item/Name/", "")
-                    item_name_map[int(item_code)] = val
+                
+                # /Eng 등 하위 속성 원천 차단
+                if key.startswith("Item/Name/"):
+                    num_str = key.replace("Item/Name/", "").strip()
+                    if num_str.isdigit():
+                        item_name_map[int(num_str)] = val
 
 # 1위 루트들을 순회하며 데이터 추출
 for _, row in df_top.iterrows():
     char_name = row['characterName']
     weapon = row['weaponName']
-    
-    # 💡 루트 번호 소수점 오류 방지 (Float -> Int 강제 변환)
     route_id = int(float(row['routeId']))
     
-    # 1. 루트 상세 API 찌르기 (스킬트리 확보)
+    # 1. 루트 상세 API 찌르기
     route_url = f"https://open-api.bser.io/v1/weaponRoutes/{route_id}"
     res = requests.get(route_url, headers=HEADERS)
     
     level_by_level = "스킬 정보 없음"
     if res.status_code == 200:
         route_data = res.json().get('result', {})
-        skill_path_raw = route_data.get('skillPath', "")
+        
+        # 💡 함정 2 해결: JSON 내부 뎁스 숨김 및 리스트 반환 완벽 대응
+        skill_path_raw = route_data.get('skillPath') or \
+                         route_data.get('recommendWeaponRoute', {}).get('skillPath') or \
+                         route_data.get('route', {}).get('skillPath') or ""
         
         skill_list = []
-        if skill_path_raw:
+        if isinstance(skill_path_raw, str) and skill_path_raw:
             for s in skill_path_raw.split(','):
                 s = s.strip()
                 if s.isdigit() and int(s) in SKILL_MAP:
                     skill_list.append(SKILL_MAP[int(s)])
+        elif isinstance(skill_path_raw, list):
+            for s in skill_path_raw:
+                if str(s).isdigit() and int(s) in SKILL_MAP:
+                    skill_list.append(SKILL_MAP[int(s)])
+                    
         if skill_list:
             level_by_level = " - ".join(skill_list)
 
-    # 2. 실전 매치 데이터에서 대체 아이템(최종 착용 장비) 통계 내기
+    # 2. 실전 매치 데이터에서 대체 아이템 통계 내기 (미스릴+ 랭크 데이터만)
     match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
     for eq_str in match_data['equipment'].dropna():
         try:
             parsed_eq = json.loads(eq_str) 
-            
-            # API가 딕셔너리로 반환한 경우 (예: {"0": 118505, "1": 202503})
             if isinstance(parsed_eq, dict):
                 for val in parsed_eq.values():
                     if str(val).isdigit():
                         all_equipments.append(int(val))
-                        
-            # API가 리스트로 반환한 경우 (예: [{"itemCode": 118505}, ...])
             elif isinstance(parsed_eq, list):
                 for eq in parsed_eq:
                     if isinstance(eq, dict) and eq.get('itemCode'):
                         all_equipments.append(int(eq.get('itemCode')))
                     elif str(eq).isdigit():
                         all_equipments.append(int(eq))
-                        
         except json.JSONDecodeError:
             continue
             
     item_counter = Counter(all_equipments)
     top_items = item_counter.most_common(10)
     
-    # 아이템 언어팩 맵핑 적용
+    # 아이템 언어팩 변환 적용
     top_items_named = [f"{item_name_map.get(code, code)}({count}회)" for code, count in top_items]
     
     print(f"\n👤 [{char_name} - {weapon}] (루트번호: {route_id})")
