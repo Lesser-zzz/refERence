@@ -20,7 +20,7 @@ if not os.path.exists(TOP_ROUTES_FILE):
 
 df_top = pd.read_csv(TOP_ROUTES_FILE)
 
-# 1. 분할된 모든 데이터셋을 읽어와 하나의 DataFrame으로 통합 (Archive 연동)
+# 1. 분할된 모든 데이터셋을 읽어와 하나의 DataFrame으로 통합
 all_dataset_files = glob.glob("reference_dataset*.csv")
 if not all_dataset_files:
     print("❌ 수집된 매치 데이터 파일이 없습니다.")
@@ -38,7 +38,7 @@ if df_list:
 else:
     df_raw = pd.DataFrame()
 
-# 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축 (무적 정규식 적용)
+# 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축
 item_name_map = {}
 l10n_res = requests.get("https://open-api.bser.io/v1/l10n/Korean", headers=HEADERS)
 if l10n_res.status_code == 200:
@@ -46,17 +46,23 @@ if l10n_res.status_code == 200:
     if l10n_url:
         res_txt = requests.get(l10n_url)
         for line in res_txt.text.splitlines():
+            # 💡 님블뉴런의 모든 특수 구분자(┃, ▒, ↕) 분할
             parts = re.split(r'[┃▒↕]', line)
-            if len(parts) >= 2 and parts[0].startswith("Item/Name/"):
-                item_code = parts[0].replace("Item/Name/", "").strip()
-                if item_code.isdigit():
-                    item_name_map[int(item_code)] = parts[1].strip()
+            if len(parts) >= 2:
+                key = parts[0].strip()
+                val = parts[1].strip()
+                # 💡 영문 데이터 원천 차단 및 숫자 ID만 캡처
+                if re.match(r'^Item/Name/\d+$', key):
+                    item_code = key.replace("Item/Name/", "")
+                    item_name_map[int(item_code)] = val
 
 # 1위 루트들을 순회하며 데이터 추출
 for _, row in df_top.iterrows():
     char_name = row['characterName']
     weapon = row['weaponName']
-    route_id = row['routeId']
+    
+    # 💡 루트 번호 소수점 오류 방지 (Float -> Int 강제 변환)
+    route_id = int(float(row['routeId']))
     
     # 1. 루트 상세 API 찌르기 (스킬트리 확보)
     route_url = f"https://open-api.bser.io/v1/weaponRoutes/{route_id}"
@@ -104,6 +110,7 @@ for _, row in df_top.iterrows():
     item_counter = Counter(all_equipments)
     top_items = item_counter.most_common(10)
     
+    # 아이템 언어팩 맵핑 적용
     top_items_named = [f"{item_name_map.get(code, code)}({count}회)" for code, count in top_items]
     
     print(f"\n👤 [{char_name} - {weapon}] (루트번호: {route_id})")
