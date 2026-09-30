@@ -67,7 +67,7 @@ queue = deque()
 # 초기 시드 확보
 res_rank = requests.get(f"https://open-api.bser.io/v1/rank/top/{SEASON_ID}/{MATCHING_MODE}", headers=HEADERS)
 if res_rank.status_code == 200:
-    for p in res_rank.json().get("topRanks", [])[:200]:
+    for p in res_rank.json().get("topRanks", [])[:800]:
         nick = p.get("nickname")
         if nick:
             queue.append(nick)
