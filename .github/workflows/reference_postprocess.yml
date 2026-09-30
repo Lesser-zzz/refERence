@@ -6,6 +6,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - name: 📥 저장소 체크아웃
@@ -25,3 +27,21 @@ jobs:
       env:
         BSER_API_KEY: ${{ secrets.BSER_API_KEY }}
       run: python postprocess_guide.py
+
+    - name: 💾 추출 결과물 깃허브에 자동 저장
+      run: |
+        git config --local user.name "github-actions[bot]"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 💡 새롭게 생성된 가이드 초안 파일을 staging 목록에 추가
+        git add reference_guide_output.txt || true
+        
+        if git diff --cached --quiet; then
+          echo "변경사항이 없습니다."
+          exit 0
+        fi
+        
+        git commit -m "🤖 [자동] refERence 상세 가이드 텍스트 추출 완료"
+        git fetch origin main
+        git pull --rebase origin main
+        git push origin main
