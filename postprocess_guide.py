@@ -21,7 +21,7 @@ if not os.path.exists(TOP_ROUTES_FILE):
 df_top = pd.read_csv(TOP_ROUTES_FILE)
 df_top = df_top.dropna(subset=['routeId'])
 
-# 1. 분할된 모든 데이터셋을 읽어와 하나의 DataFrame으로 통합
+# 1. 분할된 모든 데이터셋 통합
 all_dataset_files = glob.glob("reference_dataset*.csv")
 df_list = []
 for file in all_dataset_files:
@@ -32,7 +32,7 @@ for file in all_dataset_files:
 
 df_raw = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
-# 2. 언어팩 인코딩 강제 고정 및 맵핑 (1~5로 시작하는 6자리 장비 코드만 엄격하게 파싱)
+# 2. 언어팩 맵핑
 item_name_map = {}
 l10n_res = requests.get("https://open-api.bser.io/v1/l10n/Korean", headers=HEADERS)
 if l10n_res.status_code == 200:
@@ -47,7 +47,7 @@ if l10n_res.status_code == 200:
                 if num_str.isdigit() and len(num_str) == 6:
                     item_name_map[int(num_str)] = parts[1].strip()
 
-# JSON 내부를 밑바닥까지 뒤져 스킬 데이터를 찾아내는 재귀 탐색 함수
+# 재귀 탐색 함수
 def find_skill_path(obj):
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -61,7 +61,7 @@ def find_skill_path(obj):
             if res: return res
     return None
 
-# 1위 루트들을 순회하며 데이터 추출
+# 1위 루트 순회
 for _, row in df_top.iterrows():
     char_name = row['characterName']
     weapon = row['weaponName']
@@ -70,21 +70,17 @@ for _, row in df_top.iterrows():
     except ValueError:
         continue
     
-    # 💡 [핵심 해결] 유저 루트와 공식 루트 주소를 모두 찔러보는 방어 로직
-    route_url_primary = f"https://open-api.bser.io/v1/recommendWeaponRoutes/{route_id}"
-    route_url_fallback = f"https://open-api.bser.io/v1/weaponRoutes/{route_id}"
+    # 💡 [핵심] 삽질을 끝내고 정확한 공식 루트 상세조회 엔드포인트 단일 호출
+    route_url = f"https://open-api.bser.io/v1/weaponRoutes/recommend/{route_id}"
+    res = requests.get(route_url, headers=HEADERS)
     
-    res = requests.get(route_url_primary, headers=HEADERS)
-    if res.status_code != 200:
-        res = requests.get(route_url_fallback, headers=HEADERS)
-    
-    level_by_level = "스킬 정보 없음 (API 응답 실패 혹은 미등록)" 
+    level_by_level = "스킬 정보 없음 (미등록 혹은 오류)" 
     target_item_codes = set()
     
     if res.status_code == 200:
         route_data = res.json()
         
-        # 스킬 트리 무적 탐색
+        # 스킬 트리 탐색
         skill_path_raw = find_skill_path(route_data)
         
         skill_list = []
@@ -102,7 +98,7 @@ for _, row in df_top.iterrows():
         if skill_list:
             level_by_level = " - ".join(skill_list)
 
-        # 💡 원본 목표 전설템 추출 (응답 텍스트 전체에서 1~5로 시작하는 6자리 장비 코드 싹쓸이)
+        # 원본 목표 전설템 추출
         target_item_codes = set(int(c) for c in re.findall(r'\b[1-5]\d{5}\b', res.text))
 
     # 3. 실전 매치 데이터에서 대체 아이템 통계 내기
@@ -141,7 +137,6 @@ for _, row in df_top.iterrows():
     alternative_items = []
     
     for code, count in top_items:
-        # 아이템 이름 변환 시 실패하면 숫자 코드 그대로 출력
         item_str = f"{item_name_map.get(code, code)}({count}회)"
         if code in target_item_codes:
             original_targets.append(item_str)
