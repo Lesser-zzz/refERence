@@ -47,7 +47,7 @@ if l10n_res.status_code == 200:
                 if num_str.isdigit():
                     item_name_map[int(num_str)] = parts[1].strip()
 
-# 💡 [핵심] JSON 내부를 밑바닥까지 뒤져 스킬 데이터를 찾아내는 재귀 탐색 함수
+# JSON 내부를 밑바닥까지 뒤져 스킬 데이터를 찾아내는 재귀 탐색 함수
 def find_skill_path(obj):
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -70,8 +70,8 @@ for _, row in df_top.iterrows():
     except ValueError:
         continue
     
-    # 1. 루트 상세 API 찌르기
-    route_url = f"https://open-api.bser.io/v1/weaponRoutes/{route_id}"
+    # 💡 [핵심] 루트 상세 API 주소를 'recommendWeaponRoutes'로 정확히 수정
+    route_url = f"https://open-api.bser.io/v1/recommendWeaponRoutes/{route_id}"
     res = requests.get(route_url, headers=HEADERS)
     
     level_by_level = "스킬 정보 없음 (제작자가 미등록)" 
@@ -101,7 +101,7 @@ for _, row in df_top.iterrows():
         # 원본 목표 전설템 추출 (응답 텍스트 전체에서 6자리 코드 싹쓸이)
         target_item_codes = set(int(c) for c in re.findall(r'\b\d{6}\b', res.text))
 
-    # 2. 실전 매치 데이터에서 대체 아이템 통계 내기 (미스릴+ 랭크 데이터만)
+    # 2. 실전 매치 데이터에서 대체 아이템 통계 내기
     match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
