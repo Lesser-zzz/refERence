@@ -61,7 +61,6 @@ if not os.path.exists(CSV_DATASET):
     with open(CSV_DATASET, "w", encoding="utf-8-sig", newline="") as f:
         csv.writer(f).writerow(["gameId", "characterNum", "bestWeapon", "routeId", "mmrBefore", "mmrGain", "gameRank", "equipment"])
 
-# 💡 핵심: 텍스트 파일 대신 매 실행마다 휘발성 메모리(Set, Deque)로 초기화하여 신규 랭커만 탐색
 processed_nicknames = set()
 queue = deque()
 
@@ -102,7 +101,8 @@ while queue and loop_count < MAX_LOOPS:
         saved_games_for_this_user = 0
 
         if res_user.status_code == 200 and "user" in res_user.json():
-            user_id_str = res_user.json()["user"].get("userId")
+            # 💡 주의: userNum이 아닌 암호화된 userId를 써야 전적이 정상 수집됩니다.
+            user_id_str = res_user.json()["user"].get("userId") 
             
             if user_id_str:
                 time.sleep(REQUEST_INTERVAL)
@@ -158,7 +158,7 @@ while queue and loop_count < MAX_LOOPS:
 
 
 # ==========================================
-# 📊 3. 최적 루트 분석 (분할 파일 전체 병합)
+# 📊 3. 최적 루트 분석 (대표성 10%p 컷오프 + 성과 분리)
 # ==========================================
 print("▶️ [2단계] 최적 루트 분석 시작...", flush=True)
 all_dataset_files = glob.glob(f"{CURRENT_DATASET_PREFIX}*.csv")
@@ -179,42 +179,58 @@ if all_dataset_files and os.path.exists(MAPPING_CSV):
     df_map = pd.read_csv(MAPPING_CSV)
 
     if df_game.empty or len(df_game.columns) < 8:
-        print("⚠️️ 수집된 데이터가 비어있어 분석을 건너뜁니다.", flush=True)
+        print("⚠ 수집된 데이터가 비어있어 분석을 건너뜁니다.", flush=True)
     else:
         valid_df = df_game[(df_game['routeId'] > 0) & (df_game['mmrBefore'] >= 7600)].copy()
 
         if valid_df.empty:
             print("⚠️ 수집된 미스릴+(7600점 이상) 데이터가 아직 부족합니다.", flush=True)
         else:
-            valid_df['rp_plus'] = valid_df['mmrGain'] > 0
+            # 1. 루트별 기본 집계 (평균 RP, 중앙값 RP)
             route_stats = valid_df.groupby(['characterNum', 'bestWeapon', 'routeId']).agg(
                 pick_count=('routeId', 'count'),
-                avg_rp_gain=('mmrGain', 'mean')
+                avg_rp_gain=('mmrGain', 'mean'),
+                median_rp_gain=('mmrGain', 'median')
             ).reset_index()
 
-            route_stats = route_stats[route_stats['pick_count'] >= 30].copy()
+            # 2. 하드 컷오프: 50판 미만은 후보에서 원천 배제
+            route_stats = route_stats[route_stats['pick_count'] >= 50].copy()
 
             if route_stats.empty:
-                print("⚠️ 30판 이상 사용된 루트 데이터가 아직 없습니다.", flush=True)
+                print("⚠️ 50판 이상 사용된 루트 데이터가 아직 없습니다.", flush=True)
             else:
-                global_avg_rp = route_stats['avg_rp_gain'].mean()
-                m = 30
-                route_stats['reference_score'] = ((route_stats['pick_count'] * route_stats['avg_rp_gain']) + (m * global_avg_rp)) / (route_stats['pick_count'] + m)
-                route_stats.sort_values(by=['characterNum', 'bestWeapon', 'reference_score'], ascending=[True, True, False], inplace=True)
-                top_routes = route_stats.drop_duplicates(subset=['characterNum', 'bestWeapon'], keep='first').copy()
+                # 3. 그룹별 픽률(%) 계산
+                route_stats['group_total_picks'] = route_stats.groupby(['characterNum', 'bestWeapon'])['pick_count'].transform('sum')
+                route_stats['pick_rate'] = (route_stats['pick_count'] / route_stats['group_total_picks']) * 100
+                
+                # 4. 각 그룹의 1위 픽률을 찾고, 1위와 격차가 10%p 이내인 루트들만 후보로 남김
+                route_stats['max_pick_rate'] = route_stats.groupby(['characterNum', 'bestWeapon'])['pick_rate'].transform('max')
+                candidates = route_stats[route_stats['pick_rate'] >= (route_stats['max_pick_rate'] - 10.0)].copy()
+
+                # 5. 경합하는 후보들(10%p 이내) 안에서 평균 RP를 기준으로 최종 정렬
+                candidates.sort_values(
+                    by=['characterNum', 'bestWeapon', 'avg_rp_gain'], 
+                    ascending=[True, True, False], 
+                    inplace=True
+                )
+                
+                # 6. 각 캐릭터+무기 조합당 가장 상단에 위치한 1개 루트만 최종 추출
+                top_routes = candidates.drop_duplicates(subset=['characterNum', 'bestWeapon'], keep='first').copy()
                 final_df = pd.merge(top_routes, df_map, left_on=['characterNum', 'bestWeapon'], right_on=['characterNum', 'weaponNum'], how='inner')
 
                 if not final_df.empty:
+                    # 7. 데이터 포맷팅 (7개 열 구조)
+                    final_df['pick_rate'] = final_df['pick_rate'].round(1).astype(str) + '%'
                     final_df['avg_rp_gain'] = pd.to_numeric(final_df['avg_rp_gain']).round(1).astype(str) + '점'
-                    final_df['reference_score'] = pd.to_numeric(final_df['reference_score']).round(2)
-                    final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'avg_rp_gain', 'reference_score']
-                    final_df.sort_values(by='reference_score', ascending=False, inplace=True)
+                    final_df['median_rp_gain'] = pd.to_numeric(final_df['median_rp_gain']).round(1).astype(str) + '점'
                     
-                    # 1. 정규 데이터 저장
+                    final_cols = ['characterName', 'weaponName', 'routeId', 'pick_count', 'pick_rate', 'avg_rp_gain', 'median_rp_gain']
+                    final_df.sort_values(by='pick_count', ascending=False, inplace=True)
+                    
                     final_df[final_cols].to_csv(TOP_ROUTES_FILE, index=False, encoding='utf-8-sig')
                     
-                    # 2. 파싱 에러 완벽 차단: 줄바꿈 제거 + 6열 형식(쉼표 5개) 유지
+                    # 8. 파싱 에러 방지: 7열 데이터(쉼표 6개) 형식 유지
                     with open(TOP_ROUTES_FILE, "a", encoding="utf-8-sig") as f:
-                        f.write(f"현재 총 누적 : {total_accumulated_games},,,,,\n")
+                        f.write(f"현재 총 누적 : {total_accumulated_games},,,,,, \n")
                         
                     print(f"🎉 최종 분석 결과 저장 완료. (총 누적 데이터: {total_accumulated_games}건)", flush=True)
