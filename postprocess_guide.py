@@ -46,7 +46,6 @@ if l10n_res.status_code == 200:
     if l10n_url:
         res_txt = requests.get(l10n_url)
         for line in res_txt.text.splitlines():
-            # 💡 핵심 수정: 님블뉴런의 모든 특수 구분자(┃, ▒, ↕)에 대응
             parts = re.split(r'[┃▒↕]', line)
             if len(parts) >= 2 and parts[0].startswith("Item/Name/"):
                 item_code = parts[0].replace("Item/Name/", "").strip()
@@ -78,24 +77,33 @@ for _, row in df_top.iterrows():
             level_by_level = " - ".join(skill_list)
 
     # 2. 실전 매치 데이터에서 대체 아이템(최종 착용 장비) 통계 내기
-    # 💡 핵심: mmrBefore >= 7600 조건을 통해 랭크 점수가 없는 일반 게임 데이터를 완벽히 걸러냄
     match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
     for eq_str in match_data['equipment'].dropna():
         try:
-            eq_list = json.loads(eq_str) 
-            for eq in eq_list:
-                item_code = eq.get('itemCode')
-                if item_code:
-                    all_equipments.append(item_code)
+            parsed_eq = json.loads(eq_str) 
+            
+            # API가 딕셔너리로 반환한 경우 (예: {"0": 118505, "1": 202503})
+            if isinstance(parsed_eq, dict):
+                for val in parsed_eq.values():
+                    if str(val).isdigit():
+                        all_equipments.append(int(val))
+                        
+            # API가 리스트로 반환한 경우 (예: [{"itemCode": 118505}, ...])
+            elif isinstance(parsed_eq, list):
+                for eq in parsed_eq:
+                    if isinstance(eq, dict) and eq.get('itemCode'):
+                        all_equipments.append(int(eq.get('itemCode')))
+                    elif str(eq).isdigit():
+                        all_equipments.append(int(eq))
+                        
         except json.JSONDecodeError:
             continue
             
     item_counter = Counter(all_equipments)
     top_items = item_counter.most_common(10)
     
-    # 아이템 언어팩 변환 적용
     top_items_named = [f"{item_name_map.get(code, code)}({count}회)" for code, count in top_items]
     
     print(f"\n👤 [{char_name} - {weapon}] (루트번호: {route_id})")
