@@ -59,7 +59,6 @@ def find_skill_path(obj):
             if res: return res
     return None
 
-# 💡 텍스트 파일 생성을 위해 'w' 모드로 열기
 with open(OUTPUT_TXT_FILE, 'w', encoding='utf-8') as f:
     f.write("=== refERence 상세 가이드 초안 ===\n\n")
 
@@ -71,14 +70,24 @@ with open(OUTPUT_TXT_FILE, 'w', encoding='utf-8') as f:
         except ValueError:
             continue
         
-        # 공식 추천 루트 단일 주소 찌르기
-        route_url = f"https://open-api.bser.io/v1/weaponRoutes/recommend/{route_id}"
-        res = requests.get(route_url, headers=HEADERS)
+        # 💡 [해결] 님블뉴런의 파편화된 주소를 모두 찔러보는 폴백(Fallback) 체인
+        route_urls = [
+            f"https://open-api.bser.io/v1/recommendWeaponRoutes/{route_id}",
+            f"https://open-api.bser.io/v1/weaponRoutes/{route_id}",
+            f"https://open-api.bser.io/v1/weaponRoutes/recommend/{route_id}"
+        ]
         
-        level_by_level = "스킬 정보 없음 (미등록 혹은 비공개)" 
+        res = None
+        for url in route_urls:
+            temp_res = requests.get(url, headers=HEADERS)
+            if temp_res.status_code == 200:
+                res = temp_res
+                break
+        
+        level_by_level = "스킬 정보 없음 (미등록)" 
         target_item_codes = set()
         
-        if res.status_code == 200:
+        if res:
             route_data = res.json()
             skill_path_raw = find_skill_path(route_data)
             
@@ -97,8 +106,12 @@ with open(OUTPUT_TXT_FILE, 'w', encoding='utf-8') as f:
             if skill_list:
                 level_by_level = " - ".join(skill_list)
 
+            # 원본 목표 전설템 추출
             target_item_codes = set(int(c) for c in re.findall(r'\b[1-5]\d{5}\b', res.text))
+        else:
+            level_by_level = "API 조회 실패 (404 Not Found 등)"
 
+        # 실전 매치 데이터에서 통계 내기
         match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
         all_equipments = []
         
@@ -135,16 +148,22 @@ with open(OUTPUT_TXT_FILE, 'w', encoding='utf-8') as f:
         
         for code, count in top_items:
             item_str = f"{item_name_map.get(code, code)}({count}회)"
-            if code in target_item_codes:
+            if res and code in target_item_codes:
                 original_targets.append(item_str)
             else:
                 alternative_items.append(item_str)
         
-        # 💡 결과물 포맷팅 및 파일 기록
+        original_targets_str = ', '.join(original_targets)
+        # API 통신 실패 시 오류 안내 명시
+        if not res:
+            original_targets_str = "API 응답 실패로 조회 불가"
+        elif not original_targets:
+            original_targets_str = "통계상 채택률 0% (원본 목표템과 일치하는 실전 장비 없음)"
+
         output_text = (
             f"👤 [{char_name} - {weapon}] (루트번호: {route_id})\n"
             f"⚔️ 1~20레벨 스킬 트리: {level_by_level}\n"
-            f"🎯 루트 원본 목표템: {', '.join(original_targets)}\n"
+            f"🎯 루트 원본 목표템: {original_targets_str}\n"
             f"🔄 실전 대체 아이템: {', '.join(alternative_items)}\n"
             f"{'-' * 60}\n"
         )
