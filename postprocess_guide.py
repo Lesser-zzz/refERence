@@ -32,7 +32,7 @@ for file in all_dataset_files:
 
 df_raw = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
-# 언어팩 인코딩 강제 고정 및 맵핑
+# 2. 언어팩 인코딩 강제 고정 및 맵핑 (1~5로 시작하는 6자리 장비 코드만 엄격하게 파싱)
 item_name_map = {}
 l10n_res = requests.get("https://open-api.bser.io/v1/l10n/Korean", headers=HEADERS)
 if l10n_res.status_code == 200:
@@ -44,7 +44,7 @@ if l10n_res.status_code == 200:
             parts = re.split(r'[┃▒↕]', line)
             if len(parts) >= 2 and parts[0].startswith("Item/Name/"):
                 num_str = parts[0].replace("Item/Name/", "").strip()
-                if num_str.isdigit():
+                if num_str.isdigit() and len(num_str) == 6:
                     item_name_map[int(num_str)] = parts[1].strip()
 
 # JSON 내부를 밑바닥까지 뒤져 스킬 데이터를 찾아내는 재귀 탐색 함수
@@ -70,11 +70,15 @@ for _, row in df_top.iterrows():
     except ValueError:
         continue
     
-    # 💡 [핵심] 루트 상세 API 주소를 'recommendWeaponRoutes'로 정확히 수정
-    route_url = f"https://open-api.bser.io/v1/recommendWeaponRoutes/{route_id}"
-    res = requests.get(route_url, headers=HEADERS)
+    # 💡 [핵심 해결] 유저 루트와 공식 루트 주소를 모두 찔러보는 방어 로직
+    route_url_primary = f"https://open-api.bser.io/v1/recommendWeaponRoutes/{route_id}"
+    route_url_fallback = f"https://open-api.bser.io/v1/weaponRoutes/{route_id}"
     
-    level_by_level = "스킬 정보 없음 (제작자가 미등록)" 
+    res = requests.get(route_url_primary, headers=HEADERS)
+    if res.status_code != 200:
+        res = requests.get(route_url_fallback, headers=HEADERS)
+    
+    level_by_level = "스킬 정보 없음 (API 응답 실패 혹은 미등록)" 
     target_item_codes = set()
     
     if res.status_code == 200:
@@ -98,10 +102,10 @@ for _, row in df_top.iterrows():
         if skill_list:
             level_by_level = " - ".join(skill_list)
 
-        # 원본 목표 전설템 추출 (응답 텍스트 전체에서 6자리 코드 싹쓸이)
-        target_item_codes = set(int(c) for c in re.findall(r'\b\d{6}\b', res.text))
+        # 💡 원본 목표 전설템 추출 (응답 텍스트 전체에서 1~5로 시작하는 6자리 장비 코드 싹쓸이)
+        target_item_codes = set(int(c) for c in re.findall(r'\b[1-5]\d{5}\b', res.text))
 
-    # 2. 실전 매치 데이터에서 대체 아이템 통계 내기
+    # 3. 실전 매치 데이터에서 대체 아이템 통계 내기
     match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
@@ -126,7 +130,7 @@ for _, row in df_top.iterrows():
                     elif str(eq).isdigit():
                         all_equipments.append(int(eq))
         except json.JSONDecodeError:
-            codes = re.findall(r'\b\d{6}\b', eq_str)
+            codes = re.findall(r'\b[1-5]\d{5}\b', eq_str)
             for c in codes:
                 all_equipments.append(int(c))
             
@@ -137,6 +141,7 @@ for _, row in df_top.iterrows():
     alternative_items = []
     
     for code, count in top_items:
+        # 아이템 이름 변환 시 실패하면 숫자 코드 그대로 출력
         item_str = f"{item_name_map.get(code, code)}({count}회)"
         if code in target_item_codes:
             original_targets.append(item_str)
