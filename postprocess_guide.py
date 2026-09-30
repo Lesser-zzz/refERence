@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 import requests
@@ -21,7 +22,7 @@ if not os.path.exists(TOP_ROUTES_FILE) or not os.path.exists(CSV_DATASET):
 df_top = pd.read_csv(TOP_ROUTES_FILE)
 df_raw = pd.read_csv(CSV_DATASET)
 
-# 💡 [핵심 1] 실제 파일은 건드리지 않고, 램(메모리)에서만 '현재 총 누적' 텍스트 행을 날려버림
+# 💡 파일 원본은 유지하되, 램(RAM)에서만 불순물 행(현재 총 누적 텍스트) 삭제
 df_top = df_top.dropna(subset=['routeId'])
 
 # 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축
@@ -32,7 +33,7 @@ if l10n_res.status_code == 200:
     if l10n_url:
         res_txt = requests.get(l10n_url)
         for line in res_txt.text.splitlines():
-            # 💡 [핵심 2] 님블뉴런의 모든 특수 구분자(┃, ▒, ↕)를 분할하고 /Eng 등 영문 더미 차단
+            # 님블뉴런의 모든 특수 구분자 대응
             parts = re.split(r'[┃▒↕]', line)
             if len(parts) >= 2:
                 key = parts[0].strip()
@@ -45,8 +46,6 @@ if l10n_res.status_code == 200:
 for _, row in df_top.iterrows():
     char_name = row['characterName']
     weapon = row['weaponName']
-    
-    # 램에서 텍스트를 날렸기 때문에 float(NaN) 에러 없이 깔끔하게 정수로 변환됨
     route_id = int(float(row['routeId']))
     
     # 1. 루트 상세 API 찌르기 (스킬트리 확보)
@@ -56,9 +55,8 @@ for _, row in df_top.iterrows():
     level_by_level = "스킬 정보 없음"
     if res.status_code == 200:
         route_data = res.json().get('result', {})
-        
-        # 💡 [핵심 3] 스킬 트리가 recommendWeaponRoute 내부에 숨어있는 경우까지 완벽 추적
         skill_path_raw = route_data.get('skillPath', "")
+        # 스킬 트리가 하위 뎁스에 숨어있는 경우 대응
         if not skill_path_raw and 'recommendWeaponRoute' in route_data:
             skill_path_raw = route_data['recommendWeaponRoute'].get('skillPath', "")
             
@@ -71,24 +69,43 @@ for _, row in df_top.iterrows():
         if skill_list:
             level_by_level = " - ".join(skill_list)
 
-    # 2. 실전 매치 데이터에서 대체 아이템(최종 착용 장비) 통계 내기 (미스릴+ 랭크만 필터링)
+    # 2. 실전 매치 데이터에서 대체 아이템(최종 착용 장비) 통계 내기 (랭크 필터링)
     match_data = df_raw[(df_raw['routeId'] == route_id) & (df_raw['mmrBefore'] >= 7600)]
     all_equipments = []
     
     for eq_str in match_data['equipment'].dropna():
-        try:
-            eq_list = json.loads(eq_str) 
-            for eq in eq_list:
-                item_code = eq.get('itemCode')
-                if item_code:
-                    all_equipments.append(item_code)
-        except json.JSONDecodeError:
+        eq_str = str(eq_str).strip()
+        
+        # [방어 1] 파이프(|)로 구분된 깔끔한 포맷인 경우
+        if '|' in eq_str:
+            for code in eq_str.split('|'):
+                if code.strip().isdigit():
+                    all_equipments.append(int(code.strip()))
             continue
+            
+        # [방어 2] 과거 구형 JSON 포맷인 경우 (리스트 & 딕셔너리 완벽 분기)
+        try:
+            eq_data = json.loads(eq_str)
+            if isinstance(eq_data, list):
+                for eq in eq_data:
+                    if isinstance(eq, dict) and 'itemCode' in eq:
+                        all_equipments.append(int(eq['itemCode']))
+                    elif isinstance(eq, int):
+                        all_equipments.append(eq)
+            elif isinstance(eq_data, dict):
+                for val in eq_data.values():
+                    if str(val).isdigit():
+                        all_equipments.append(int(val))
+        except json.JSONDecodeError:
+            # [최후의 보루] JSON 파싱마저 박살난 찌꺼기 문자열이면 6자리 숫자만 강제 추출
+            codes = re.findall(r'\b\d{6}\b', eq_str)
+            for c in codes:
+                all_equipments.append(int(c))
             
     item_counter = Counter(all_equipments)
     top_items = item_counter.most_common(10)
     
-    # 숫자 코드를 한글 명칭으로 변환 (언어팩에 없으면 숫자로라도 표시)
+    # 숫자 코드를 한글 명칭으로 변환
     top_items_named = [f"{item_name_map.get(int(code), code)}({count}회)" for code, count in top_items]
     
     print(f"\n👤 [{char_name} - {weapon}] (루트번호: {route_id})")
