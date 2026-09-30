@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import json
 import glob
+import re
 from collections import Counter
 
 API_KEY = os.environ.get("BSER_API_KEY")
@@ -37,7 +38,7 @@ if df_list:
 else:
     df_raw = pd.DataFrame()
 
-# 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축
+# 언어팩(l10n)으로 아이템 코드 -> 한글 이름 변환기 구축 (무적 정규식 적용)
 item_name_map = {}
 l10n_res = requests.get("https://open-api.bser.io/v1/l10n/Korean", headers=HEADERS)
 if l10n_res.status_code == 200:
@@ -45,7 +46,8 @@ if l10n_res.status_code == 200:
     if l10n_url:
         res_txt = requests.get(l10n_url)
         for line in res_txt.text.splitlines():
-            parts = line.split("┃")
+            # 💡 핵심 수정: 님블뉴런의 모든 특수 구분자(┃, ▒, ↕)에 대응
+            parts = re.split(r'[┃▒↕]', line)
             if len(parts) >= 2 and parts[0].startswith("Item/Name/"):
                 item_code = parts[0].replace("Item/Name/", "").strip()
                 if item_code.isdigit():
@@ -93,6 +95,7 @@ for _, row in df_top.iterrows():
     item_counter = Counter(all_equipments)
     top_items = item_counter.most_common(10)
     
+    # 아이템 언어팩 변환 적용
     top_items_named = [f"{item_name_map.get(code, code)}({count}회)" for code, count in top_items]
     
     print(f"\n👤 [{char_name} - {weapon}] (루트번호: {route_id})")
